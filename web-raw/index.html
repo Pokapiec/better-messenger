@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatroom</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <main>
+        <h1>Welcome to chatroom!</h1>
+        <section id="messages"></section>
+
+        <form id="chat-form">
+            <input type="text" name="msg-input" id="msg-input" placeholder="Type a message...">
+            <input type="submit" value="submit">
+        </form>
+    </main>
+
+    <div class="username-modal-wrapper">
+        <div class="username-modal">
+            <h1>Enter your chat username</h1>
+            <form id="username-form">
+                <input type="text" name="username-input" id="username-input" placeholder="Type your username..."
+                    maxlength="30" minlength="3" required>
+                <input type="submit" value="submit">
+            </form>
+        </div>
+    </div>
+
+
+    <script type="text/javascript">
+        window.onload = function () {
+            var conn;
+            var username = localStorage.getItem("username");
+            var msg = document.getElementById("msg-input");
+            var messagesSpot = document.getElementById("messages");
+
+            if (username != null && username != undefined) {
+                hideUsernameModal()
+                connectToWSS()
+            }
+
+            function addChatMsg(message, remote) {
+                let item = document.createElement("div");
+                item.classList.add("chat-msg")
+
+                messageClasses = ""
+                usernameContent = ""
+                if (remote) {
+                    item.classList.add("remote-msg")
+                    usernameContent = `<div class="msg-username">${message.username}</div>`
+                } else {
+                    item.classList.add("client-msg")
+                    messageClasses = "client-msg-content"
+                }
+
+                item.innerHTML = `
+                    <div class="msg-content ${messageClasses}">
+                        ${usernameContent}
+                        ${message.message}
+                    </div>
+                `;
+                messagesSpot.appendChild(item)
+
+                // Scroll to bottom in messages container
+                messagesSpot.scrollTop = messagesSpot.scrollHeight
+            }
+
+            document.getElementById("chat-form").onsubmit = function (e) {
+                e.preventDefault()
+                if (!conn) {
+                    return false;
+                }
+                if (!msg.value) {
+                    return false;
+                }
+                let messageData = { username: username, message: msg.value }
+                addChatMsg(messageData, false)
+
+                let data = JSON.stringify(messageData)
+                conn.send(data);
+                msg.value = "";
+                return false;
+            };
+
+            function hideUsernameModal() {
+                let modalWrapper = document.getElementsByClassName("username-modal-wrapper")
+                modalWrapper[0].classList.add("display-none")
+            }
+
+            document.getElementById("username-form").onsubmit = function (e) {
+                e.preventDefault()
+                let usernameElem = document.getElementById("username-input");
+                username = usernameElem.value;
+                localStorage.setItem("username", username)
+
+                connectToWSS()
+                hideUsernameModal()
+            };
+
+
+            function connectToWSS() {
+                if (window["WebSocket"]) {
+                    conn = new WebSocket("ws://127.0.0.1:3001/ws");
+
+                    // conn.onopen = function (evt) {
+                    //     conn.send()
+                    // }
+
+                    conn.onclose = function (evt) {
+                        // var item = document.createElement("div");
+                        // item.innerHTML = "<b>Connection closed.</b>";
+                        // appendLog(item);
+                        console.log("Closed...")
+                    };
+                    conn.onmessage = function (evt) {
+                        addChatMsg(JSON.parse(evt.data), true)
+                        console.log("Got message: ", evt.data)
+                    };
+                } else {
+                    // var item = document.createElement("div");
+                    // item.innerHTML = "<b>Your browser does not support WebSockets.</b>";
+                    // appendLog(item);
+                    console.log("websockets not suported...")
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>
