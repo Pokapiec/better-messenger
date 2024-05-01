@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/gorilla/websocket"
@@ -16,16 +17,21 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSMessage struct {
-	Username string `json:"username"`
-	Message  string `json:"message"`
+	Username       string `json:"username"`
+	Message        string `json:"message"`
+	ConversationId int    `json:"conversation_id"`
+}
+
+type ConnectionData struct {
+	Conversations []int
 }
 
 type Server struct {
-	connections map[*websocket.Conn]bool
+	connections map[*websocket.Conn]ConnectionData
 }
 
 func (s *Server) AddConn(newConn *websocket.Conn) {
-	s.connections[newConn] = true
+	s.connections[newConn] = ConnectionData{Conversations: []int{}}
 }
 
 func (s *Server) RemoveConn(conn *websocket.Conn) {
@@ -54,10 +60,27 @@ func (s *Server) WSSHandler(storage *Storage) http.HandlerFunc {
 			}
 			fmt.Println("received msg:", jsonMsg)
 
-			for c := range s.connections {
+			if jsonMsg.Message == "<INITIAL>" {
+				value := s.connections[conn]
+				value.Conversations = append(value.Conversations, jsonMsg.ConversationId)
+				s.connections[conn] = value
+				continue
+			}
+
+			err = storage.CreateMessage(jsonMsg)
+			if err != nil {
+				fmt.Println("Failed to create message:", err)
+			}
+
+			for c, cData := range s.connections {
 				if c == conn {
 					continue
 				}
+
+				if !slices.Contains(cData.Conversations, jsonMsg.ConversationId) {
+					continue
+				}
+
 				err = c.WriteJSON(jsonMsg)
 				if err != nil {
 					log.Println("Failed writing msg:", err)
@@ -80,18 +103,27 @@ func HanlderMessageList(storage *Storage) http.HandlerFunc {
 
 		messages, err := storage.GetMessages(conversationId)
 		if err != nil {
+			fmt.Println("error fetching messages", err)
 			http.Error(w, "Error fetching data", http.StatusBadRequest)
 			return
 		}
+		JSONResponse(w, HttpResponse{Data: messages})
+	}
+}
 
-		log.Println("retrieved messages:", messages)
-
-		JSONResponse(w, HttpResponse{data: messages})
+func HanlderConversationList(storage *Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conversations, err := storage.GetConversations()
+		if err != nil {
+			http.Error(w, "Error fetching data", http.StatusBadRequest)
+			return
+		}
+		JSONResponse(w, HttpResponse{Data: conversations})
 	}
 }
 
 func main() {
-	server := Server{connections: make(map[*websocket.Conn]bool)}
+	server := Server{connections: make(map[*websocket.Conn]ConnectionData)}
 	router := http.NewServeMux()
 	storage, err := NewStorage()
 	if err != nil {
@@ -99,7 +131,21 @@ func main() {
 	}
 	router.HandleFunc("GET /ws", server.WSSHandler(storage))
 	router.HandleFunc("GET /conversations/{id}/messages", HanlderMessageList(storage))
+	router.HandleFunc("GET /conversations", HanlderConversationList(storage))
 
 	log.Println("Listening on :3001...")
-	http.ListenAndServe("127.0.0.1:3001", router)
+
+	corsHandler := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Set CORS headers
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+			// Call the next handler
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	http.ListenAndServe("127.0.0.1:3001", corsHandler(router))
 }

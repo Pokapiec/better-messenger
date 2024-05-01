@@ -2,16 +2,19 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
 type HttpResponse struct {
-	data interface{}
+	Data interface{} `json:"data"`
 }
 
 func JSONResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+
+	log.Println("encoding data:", data)
 
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {

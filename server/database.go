@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"log"
+
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -25,24 +28,32 @@ CREATE TABLE IF NOT EXISTS users (
 `
 
 type Message struct {
-	Id             int    `db:"id"`
-	Message        string `db:"message"`
-	UserId         int    `db:"user_id"`
-	ConversationId int    `db:"conversation_id"`
+	Id             int    `db:"id" json:"id"`
+	Message        string `db:"message" json:"message"`
+	UserId         int    `db:"user_id" json:"user_id"`
+	ConversationId int    `db:"conversation_id" json:"conversation_id"`
 }
 
 type Conversation struct {
-	Id   int    `db:"id"`
-	Name string `db:"name"`
+	Id   int    `db:"id" json:"id"`
+	Name string `db:"name" json:"name"`
 }
 
 type User struct {
-	Id       int    `db:"id"`
-	Username string `db:"username"`
+	Id       int    `db:"id" json:"id"`
+	Username string `db:"username" json:"username"`
 }
 
 type Storage struct {
 	DB *sqlx.DB
+}
+
+type MessageForFrontend struct {
+	Id             int    `db:"id" json:"id"`
+	Message        string `db:"message" json:"message"`
+	UserId         int    `db:"user_id" json:"user_id"`
+	Username       string `db:"username" json:"username"`
+	ConversationId int    `db:"conversation_id" json:"conversation_id"`
 }
 
 func NewStorage() (*Storage, error) {
@@ -55,12 +66,67 @@ func NewStorage() (*Storage, error) {
 	return &Storage{DB: db}, nil
 }
 
-func (s Storage) GetMessages(conversationId int) ([]Message, error) {
-	var messages []Message
-	err := s.DB.Select(&messages, "SELECT id, message, user_id FROM messages WHERE conversation_id = $1", conversationId)
+func (s Storage) GetMessages(conversationId int) ([]MessageForFrontend, error) {
+	var messages []MessageForFrontend
+	err := s.DB.Select(&messages, `SELECT 
+	messages.id, message, user_id, users.username, conversation_id 
+	FROM messages 
+	LEFT JOIN users ON messages.user_id = users.id
+	WHERE conversation_id = $1`,
+		conversationId,
+	)
 	if err != nil {
-		return []Message{}, err
+		return []MessageForFrontend{}, err
 	}
 
 	return messages, nil
+}
+
+func (s Storage) GetConversations() ([]Conversation, error) {
+	var conversations []Conversation
+	err := s.DB.Select(&conversations, "SELECT id, name FROM conversations")
+	if err != nil {
+		log.Println("Error when fetching conversations:", err)
+		return []Conversation{}, err
+	}
+
+	return conversations, nil
+}
+
+func (s Storage) GetOrCreateUser(username string) (User, error) {
+	user := User{}
+
+	err := s.DB.Get(&user, "SELECT id, username FROM users WHERE username = $1", username)
+	if err == nil {
+		fmt.Println("User for username already exists.")
+		return user, nil
+	}
+	fmt.Println("Creating user...")
+
+	var insertedId int
+	err = s.DB.QueryRow("INSERT INTO users (username) VALUES ($1) RETURNING id", username).Scan(&insertedId)
+	user = User{Id: insertedId, Username: username}
+
+	if err != nil {
+		return User{}, err
+	}
+
+	return user, nil
+}
+
+func (s Storage) CreateMessage(msgJson WSMessage) error {
+	user, err := s.GetOrCreateUser(msgJson.Username)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.DB.NamedExec("INSERT INTO messages (message, user_id, conversation_id) VALUES (:message, :user_id, :conversation_id)", map[string]interface{}{
+		"message":         msgJson.Message,
+		"user_id":         user.Id,
+		"conversation_id": msgJson.ConversationId,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
